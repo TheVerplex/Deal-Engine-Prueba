@@ -6,35 +6,33 @@ metadata:
   labels:
     app: backend
 spec:
-  replicas: 3                         # 3 réplicas para manejar 500 req/s
+  replicas: 3
   selector:
     matchLabels:
-      app: backend                    # conecta este Deployment con sus pods
+      app: backend
   strategy:
-    type: RollingUpdate               # zero downtime en cada deploy
+    type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1                     # crea 1 pod nuevo antes de matar el viejo
-      maxUnavailable: 0               # nunca bajes de 3 pods disponibles
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
-        app: backend                  # debe coincidir con selector.matchLabels
+        app: backend
     spec:
       containers:
       - name: backend
-        # Imagen desde Amazon ECR — reemplaza <ACCOUNT_ID> y <REGION>
         image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/backend:latest
         ports:
         - containerPort: 8080
         resources:
           requests:
-            cpu: "250m"               # mínimo garantizado (usado por Karpenter para aprovisionar nodos)
+            cpu: "250m"
             memory: "256Mi"
           limits:
-            cpu: "500m"               # si lo supera, K8s lo throttlea
-            memory: "512Mi"           # si lo supera, K8s mata el pod (OOMKilled)
+            cpu: "500m"
+            memory: "512Mi"
         env:
-          # Variables no sensibles — vienen del ConfigMap
           - name: APP_ENV
             valueFrom:
               configMapKeyRef:
@@ -65,7 +63,6 @@ spec:
               configMapKeyRef:
                 name: app-config
                 key: DB_NAME
-          # Variables sensibles — vienen del Secret (sincronizado desde AWS Secrets Manager)
           - name: DB_PASSWORD
             valueFrom:
               secretKeyRef:
@@ -81,16 +78,12 @@ spec:
               secretKeyRef:
                 name: db-secret
                 key: JWT_SECRET
-        # Readiness: ¿listo para recibir tráfico?
-        # Si falla, K8s lo saca de la rotación pero NO lo mata
         readinessProbe:
           httpGet:
             path: /ready
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 5
-        # Liveness: ¿sigue funcionando?
-        # Si falla, K8s mata y reinicia el pod
         livenessProbe:
           httpGet:
             path: /health

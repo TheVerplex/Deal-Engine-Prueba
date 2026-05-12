@@ -5,17 +5,15 @@ metadata:
   namespace: production
 spec:
   selector:
-    app: backend                # conecta con los pods que tienen este label
+    app: backend
   ports:
   - protocol: TCP
-    port: 80                    # puerto por el que otros servicios internos lo llaman
-    targetPort: 8080            # puerto real donde corre la app dentro del pod
-  type: ClusterIP               # solo accesible dentro del clúster, nunca desde internet
-                                # ClusterIP protege el backend — todo el tráfico externo
-                                # pasa por WAF → ALB → Ingress, nunca directo al backend
+    port: 80
+    targetPort: 8080
+  type: ClusterIP
 
 ---
-# Service del Frontend (mismo patrón)
+
 apiVersion: v1
 kind: Service
 metadata:
@@ -27,5 +25,5 @@ spec:
   ports:
   - protocol: TCP
     port: 80
-    targetPort: 3000            # puerto donde corre el frontend
+    targetPort: 3000
   type: ClusterIP

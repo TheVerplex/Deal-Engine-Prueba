@@ -8,18 +8,18 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: backend
-  minReplicas: 3          # mínimo siempre activo para manejar 500 req/s base
-  maxReplicas: 10         # máximo en picos estacionales (doble del tráfico normal)
+  minReplicas: 3
+  maxReplicas: 10
   metrics:
   - type: Resource
     resource:
       name: cpu
       target:
         type: Utilization
-        averageUtilization: 70    # escala cuando CPU promedio supere 70%
+        averageUtilization: 70
   - type: Resource
     resource:
       name: memory
       target:
         type: Utilization
-        averageUtilization: 80    # escala cuando memoria promedio supere 80%
+        averageUtilization: 80
