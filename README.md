@@ -44,7 +44,7 @@ Fargate es serverless y elimina la gestión de nodos, pero a la escala de 500-10
 
 ### Diagrama de alto nivel
 
-> Ver archivo `![Diagrama de arquitectura](diagrams/diagrama_arquitectura_general.png)`
+<img width="818" height="108" alt="image" src="https://github.com/user-attachments/assets/00498bb9-810b-4e74-9e27-a5bb0fbee761" />
 
 ### Flujo de tráfico
 
