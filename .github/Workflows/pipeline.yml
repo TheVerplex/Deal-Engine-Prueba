@@ -1,0 +1,178 @@
+name: CI/CD Pipeline — Deal Engine
+
+on:
+  push:
+    branches:
+      - main        # deploy a producción
+      - staging     # deploy a staging
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: deal-engine/backend
+  EKS_CLUSTER: deal-engine-cluster
+
+jobs:
+
+  # ─────────────────────────────────────
+  # JOB 1 — Checkout y validación
+  # ─────────────────────────────────────
+  validate:
+    name: Checkout y validación
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Validar archivos YAML de K8s
+        run: |
+          curl -sL https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz | tar xz
+          ./kubeval k8s-manifests/*.yaml
+
+      - name: Lint del Dockerfile
+        run: |
+          docker run --rm -i hadolint/hadolint < Dockerfile
+
+  # ─────────────────────────────────────
+  # JOB 2 — Build y pruebas unitarias
+  # ─────────────────────────────────────
+  build-and-test:
+    name: Build y pruebas
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Correr pruebas unitarias
+        run: |
+          npm install
+          npm test
+
+      - name: Build de la imagen Docker
+        run: |
+          docker build -t $ECR_REPOSITORY:${{ github.sha }} .
+
+  # ─────────────────────────────────────
+  # JOB 3 — Escaneo de seguridad
+  # ─────────────────────────────────────
+  security-scan:
+    name: Escaneo de seguridad
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Escaneo de vulnerabilidades con Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          format: table
+          exit-code: 1
+          severity: CRITICAL,HIGH
+
+      - name: Escaneo de secretos con Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+
+  # ─────────────────────────────────────
+  # JOB 4 — Publicación de imagen a ECR
+  # ─────────────────────────────────────
+  push-to-ecr:
+    name: Publicar imagen a ECR
+    runs-on: ubuntu-latest
+    needs: security-scan
+    steps:
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login a Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push de imagen a ECR
+        run: |
+          ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+                     $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  # ─────────────────────────────────────
+  # JOB 5 — Despliegue a Staging
+  # ─────────────────────────────────────
+  deploy-staging:
+    name: Deploy a Staging
+    runs-on: ubuntu-latest
+    needs: push-to-ecr
+    if: github.ref == 'refs/heads/staging'
+    steps:
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Conectar a EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region $AWS_REGION \
+            --name $EKS_CLUSTER
+
+      - name: Deploy a namespace staging
+        run: |
+          kubectl set image deployment/backend \
+            backend=$ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            -n staging
+          kubectl rollout status deployment/backend -n staging
+
+  # ─────────────────────────────────────
+  # JOB 6 — Gate manual + Deploy a Producción + Rollback
+  # ─────────────────────────────────────
+  deploy-production:
+    name: Deploy a Producción
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: production
+      url: https://api.dealengine.com
+    # "environment: production" pausa el pipeline y requiere
+    # aprobación manual de un reviewer antes de continuar
+    steps:
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Conectar a EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region $AWS_REGION \
+            --name $EKS_CLUSTER
+
+      - name: Deploy a namespace production
+        run: |
+          kubectl set image deployment/backend \
+            backend=$ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            -n production
+          kubectl rollout status deployment/backend -n production
+
+      # Rollback automático si el deploy falla
+      - name: Rollback si falla
+        if: failure()
+        run: |
+          kubectl rollout undo deployment/backend -n production
+          echo "Deploy falló — rollback ejecutado a la versión anterior"

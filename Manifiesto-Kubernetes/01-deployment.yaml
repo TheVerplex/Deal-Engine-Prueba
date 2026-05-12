@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: production
+  labels:
+    app: backend
+spec:
+  replicas: 3                         # 3 réplicas para manejar 500 req/s
+  selector:
+    matchLabels:
+      app: backend                    # conecta este Deployment con sus pods
+  strategy:
+    type: RollingUpdate               # zero downtime en cada deploy
+    rollingUpdate:
+      maxSurge: 1                     # crea 1 pod nuevo antes de matar el viejo
+      maxUnavailable: 0               # nunca bajes de 3 pods disponibles
+  template:
+    metadata:
+      labels:
+        app: backend                  # debe coincidir con selector.matchLabels
+    spec:
+      containers:
+      - name: backend
+        # Imagen desde Amazon ECR — reemplaza <ACCOUNT_ID> y <REGION>
+        image: <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/backend:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: "250m"               # mínimo garantizado (usado por Karpenter para aprovisionar nodos)
+            memory: "256Mi"
+          limits:
+            cpu: "500m"               # si lo supera, K8s lo throttlea
+            memory: "512Mi"           # si lo supera, K8s mata el pod (OOMKilled)
+        env:
+          # Variables no sensibles — vienen del ConfigMap
+          - name: APP_ENV
+            valueFrom:
+              configMapKeyRef:
+                name: app-config
+                key: APP_ENV
+          - name: API_URL
+            valueFrom:
+              configMapKeyRef:
+                name: app-config
+                key: API_URL
+          - name: LOG_LEVEL
+            valueFrom:
+              configMapKeyRef:
+                name: app-config
+                key: LOG_LEVEL
+          - name: DB_HOST
+            valueFrom:
+              configMapKeyRef:
+                name: app-config
+                key: DB_HOST
+          - name: DB_PORT
+            valueFrom:
+              configMapKeyRef:
+                name: app-config
+                key: DB_PORT
+          - name: DB_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: app-config
+                key: DB_NAME
+          # Variables sensibles — vienen del Secret (sincronizado desde AWS Secrets Manager)
+          - name: DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: db-secret
+                key: DB_PASSWORD
+          - name: DB_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: db-secret
+                key: DB_USERNAME
+          - name: JWT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: db-secret
+                key: JWT_SECRET
+        # Readiness: ¿listo para recibir tráfico?
+        # Si falla, K8s lo saca de la rotación pero NO lo mata
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        # Liveness: ¿sigue funcionando?
+        # Si falla, K8s mata y reinicia el pod
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
